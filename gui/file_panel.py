@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
@@ -32,15 +33,20 @@ def local_list_dir(path: str) -> list[dict]:
     entries = []
     for item in items:
         try:
-            s = item.stat(follow_symlinks=True)
-            is_dir = item.is_dir(follow_symlinks=True)
+            # Use the DirEntry cached lstat (follow_symlinks=False) so we never
+            # block on iCloud / network-volume metadata fetches per file.
+            s = item.stat(follow_symlinks=False)
+            is_dir = stat.S_ISDIR(s.st_mode)
+            # For symlinks to dirs, is_dir via mode is False; check the link target.
+            if not is_dir and stat.S_ISLNK(s.st_mode):
+                is_dir = item.is_dir(follow_symlinks=True)
             entries.append({
                 "name":        item.name,
                 "path":        item.path,
                 "is_dir":      is_dir,
                 "size":        s.st_size if not is_dir else 0,
                 "modified":    datetime.fromtimestamp(s.st_mtime),
-                "permissions": oct(s.st_mode)[-4:],
+                "permissions": oct(stat.S_IMODE(s.st_mode)),
             })
         except Exception:
             continue
@@ -296,17 +302,16 @@ class FilePanel(ttk.Frame):
     # ------------------------------------------------------------------
 
     def _navigate_to(self, path: str, add_history: bool = True) -> None:
-        if self._navigating:
-            return          # already fetching — drop the click
-        if self.is_remote and (not self._ssh or not self._ssh.connected):
-            self.show_disconnected()
-            return
-
-        self._navigating = True
-        self._status.set(f"Loading {path} …")
-        self._tree.config(selectmode="none")
-
         if self.is_remote:
+            if not self._ssh or not self._ssh.connected:
+                self.show_disconnected()
+                return
+            # Remote: I/O in background thread; guard against concurrent fetches.
+            if self._navigating:
+                return
+            self._navigating = True
+            self._status.set(f"Loading {path} …")
+
             def fetch():
                 try:
                     entries = self._ssh.list_directory(path)
@@ -315,21 +320,18 @@ class FilePanel(ttk.Frame):
                 except Exception as exc:
                     if self.winfo_exists():
                         self.after(0, lambda e=str(exc): self._navigate_error(e))
-        else:
-            def fetch():
-                try:
-                    entries = local_list_dir(path)
-                    if self.winfo_exists():
-                        self.after(0, lambda: self._finish_navigate(path, entries, add_history))
-                except Exception as exc:
-                    if self.winfo_exists():
-                        self.after(0, lambda e=str(exc): self._navigate_error(e))
 
-        threading.Thread(target=fetch, daemon=True).start()
+            threading.Thread(target=fetch, daemon=True).start()
+        else:
+            # Local: synchronous — lstat-only so iCloud/network volumes don't block.
+            try:
+                entries = local_list_dir(path)
+                self._finish_navigate(path, entries, add_history)
+            except Exception as exc:
+                messagebox.showerror("Error", str(exc), parent=self)
 
     def _finish_navigate(self, path: str, entries: list[dict], add_history: bool) -> None:
         self._navigating = False
-        self._tree.config(selectmode="extended")
         if add_history:
             if self._hist_idx < len(self._history) - 1:
                 self._history = self._history[: self._hist_idx + 1]
@@ -343,7 +345,6 @@ class FilePanel(ttk.Frame):
 
     def _navigate_error(self, error: str) -> None:
         self._navigating = False
-        self._tree.config(selectmode="extended")
         self._status.set("Error")
         messagebox.showerror("Error", error, parent=self)
 
