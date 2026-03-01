@@ -1,0 +1,11 @@
+#!/bin/bash
+# MacSCP launcher
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+if [ ! -d ".venv" ]; then
+    echo "Virtual environment not found. Running installer first..."
+    bash install.sh
+fi
+
+exec .venv/bin/python main.py "$@"
