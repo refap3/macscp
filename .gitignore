@@ -18,3 +18,5 @@ venv/
 
 # App data (user-specific)
 *.mf
+build/
+dist/
