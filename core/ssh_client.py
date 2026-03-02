@@ -298,7 +298,23 @@ class SSHClient:
         threading.Thread(target=_ka, daemon=True, name="ssh-keepalive").start()
 
     def open_terminal(self) -> None:
-        """Open macOS Terminal with an SSH session to the remote host."""
+        """Open a terminal with an SSH session to the remote host."""
+        import sys
         cmd = f"ssh -p {self._port} {self._username}@{self._host}"
-        script = f'tell application "Terminal" to activate\ntell application "Terminal" to do script "{cmd}"'
-        subprocess.Popen(["osascript", "-e", script])
+        if sys.platform == "darwin":
+            script = (
+                'tell application "Terminal" to activate\n'
+                f'tell application "Terminal" to do script "{cmd}"'
+            )
+            subprocess.Popen(["osascript", "-e", script])
+        elif sys.platform == "win32":
+            subprocess.Popen(["cmd", "/c", "start", "cmd", "/k", cmd])
+        else:
+            import shutil
+            for term in ("x-terminal-emulator", "gnome-terminal", "konsole", "xterm"):
+                if shutil.which(term):
+                    if term == "gnome-terminal":
+                        subprocess.Popen([term, "--", "bash", "-c", cmd])
+                    else:
+                        subprocess.Popen([term, "-e", cmd])
+                    break

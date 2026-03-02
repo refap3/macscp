@@ -721,13 +721,26 @@ class FilePanel(QWidget):
             if self._ssh and self._ssh.connected:
                 self._ssh.open_terminal()
         else:
+            import sys
             path = self._current_path or str(Path.home())
-            safe = path.replace("\\", "\\\\").replace('"', '\\"')
-            script = (
-                'tell application "Terminal" to activate\n'
-                f'tell application "Terminal" to do script "cd \\"{safe}\\""'
-            )
-            subprocess.Popen(["osascript", "-e", script])
+            if sys.platform == "darwin":
+                safe = path.replace("\\", "\\\\").replace('"', '\\"')
+                script = (
+                    'tell application "Terminal" to activate\n'
+                    f'tell application "Terminal" to do script "cd \\"{safe}\\""'
+                )
+                subprocess.Popen(["osascript", "-e", script])
+            elif sys.platform == "win32":
+                subprocess.Popen(["cmd", "/c", "start", "cmd", "/k", f"cd /d {path}"])
+            else:
+                # Linux / other — try common terminal emulators
+                for term in ("x-terminal-emulator", "gnome-terminal", "konsole", "xterm"):
+                    if shutil.which(term):
+                        if term == "gnome-terminal":
+                            subprocess.Popen([term, "--working-directory", path])
+                        else:
+                            subprocess.Popen([term], cwd=path)
+                        break
 
     # ------------------------------------------------------------------
     # Helpers
