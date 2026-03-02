@@ -1,103 +1,88 @@
-"""Dialog shown when a transfer destination file already exists."""
+"""Dialog shown when a transfer destination file already exists (PyQt6)."""
 
-import tkinter as tk
-from tkinter import ttk
-from datetime import datetime
+from PyQt6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGridLayout,
+    QFrame, QWidget,
+)
+from PyQt6.QtCore import Qt
 
 
-class OverwriteDialog(tk.Toplevel):
+class OverwriteDialog(QDialog):
     """Ask user how to handle an existing destination file.
 
-    ``result`` is one of: 'overwrite', 'overwrite_all', 'skip', 'skip_all', 'cancel'
+    result is one of: 'overwrite', 'overwrite_all', 'skip', 'skip_all', 'cancel'
     """
 
-    def __init__(
-        self,
-        parent: tk.Widget,
-        filename: str,
-        src_info: dict | None = None,
-        dst_info: dict | None = None,
-    ):
+    def __init__(self, parent: QWidget, filename: str,
+                 src_info: dict | None = None, dst_info: dict | None = None):
         super().__init__(parent)
-        self.title("File already exists")
-        self.resizable(False, False)
-        self.transient(parent)
-        self.grab_set()
+        self.setWindowTitle("File already exists")
+        self.setFixedSize(520, 220)
+        self.setModal(True)
 
         self.result: str = "cancel"
-
         self._build_ui(filename, src_info, dst_info)
-        self._center(parent)
-        self.wait_window()
-
-    # ------------------------------------------------------------------
 
     def _build_ui(self, filename: str, src_info, dst_info) -> None:
-        f = ttk.Frame(self, padding=18)
-        f.pack(fill=tk.BOTH, expand=True)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(18, 18, 18, 18)
 
-        # Icon + message
-        ttk.Label(f, text="⚠️", font=("TkDefaultFont", 28)).grid(
-            row=0, column=0, rowspan=3, padx=(0, 12), sticky="n"
-        )
-        ttk.Label(f, text="A file with this name already exists:", font=("TkDefaultFont", 11)).grid(
-            row=0, column=1, sticky="w"
-        )
-        ttk.Label(f, text=filename, font=("TkDefaultFont", 11, "bold")).grid(
-            row=1, column=1, sticky="w"
-        )
+        # Warning header
+        header = QHBoxLayout()
+        icon = QLabel("Warning")
+        icon.setStyleSheet("font-size: 24px; font-weight: bold; color: #FF9800;")
+        header.addWidget(icon)
 
-        # Source / destination info
+        msg_layout = QVBoxLayout()
+        msg_layout.addWidget(QLabel("A file with this name already exists:"))
+        name_label = QLabel(filename)
+        name_label.setStyleSheet("font-weight: bold;")
+        msg_layout.addWidget(name_label)
+        header.addLayout(msg_layout)
+        header.addStretch()
+        layout.addLayout(header)
+
+        # File info
         if src_info or dst_info:
-            info_frame = ttk.Frame(f, relief="sunken", padding=8)
-            info_frame.grid(row=2, column=1, sticky="ew", pady=(8, 0))
+            info_grid = QGridLayout()
             row = 0
-            for label, info in [("Source:", src_info), ("Destination:", dst_info)]:
+            for label_text, info in [("Source:", src_info), ("Destination:", dst_info)]:
                 if info:
                     size_str = _fmt_size(info.get("size", 0))
                     mod_str = ""
                     if info.get("modified"):
                         try:
-                            mod_str = info["modified"].strftime(" (%Y-%m-%d %H:%M)")
+                            mod_str = f" ({info['modified'].strftime('%Y-%m-%d %H:%M')})"
                         except Exception:
                             pass
-                    ttk.Label(info_frame, text=label, foreground="#666").grid(
-                        row=row, column=0, sticky="w"
-                    )
-                    ttk.Label(info_frame, text=f"{size_str}{mod_str}").grid(
-                        row=row, column=1, sticky="w", padx=(6, 0)
-                    )
+                    lbl = QLabel(label_text)
+                    lbl.setStyleSheet("color: #666;")
+                    info_grid.addWidget(lbl, row, 0)
+                    info_grid.addWidget(QLabel(f"{size_str}{mod_str}"), row, 1)
                     row += 1
+            layout.addLayout(info_grid)
+
+        layout.addStretch()
 
         # Buttons
-        bf = ttk.Frame(f)
-        bf.grid(row=3, column=0, columnspan=2, pady=(16, 0))
-
-        btn_defs = [
-            ("Overwrite",     "overwrite"),
+        btn_layout = QHBoxLayout()
+        for text, value in [
+            ("Overwrite", "overwrite"),
             ("Overwrite All", "overwrite_all"),
-            ("Skip",          "skip"),
-            ("Skip All",      "skip_all"),
-            ("Cancel",        "cancel"),
-        ]
-        for text, value in btn_defs:
-            v = value
-            ttk.Button(bf, text=text, width=12, command=lambda v=v: self._pick(v)).pack(
-                side=tk.LEFT, padx=4
-            )
+            ("Skip", "skip"),
+            ("Skip All", "skip_all"),
+            ("Cancel", "cancel"),
+        ]:
+            btn = QPushButton(text)
+            btn.clicked.connect(lambda checked, v=value: self._pick(v))
+            btn_layout.addWidget(btn)
 
-        self.bind("<Escape>", lambda _: self._pick("cancel"))
+        layout.addLayout(btn_layout)
 
     def _pick(self, value: str) -> None:
         self.result = value
-        self.destroy()
-
-    def _center(self, parent: tk.Widget) -> None:
-        self.update_idletasks()
-        px, py = parent.winfo_rootx(), parent.winfo_rooty()
-        pw, ph = parent.winfo_width(), parent.winfo_height()
-        w, h = self.winfo_width(), self.winfo_height()
-        self.geometry(f"+{px + (pw - w) // 2}+{py + (ph - h) // 2}")
+        self.accept()
 
 
 def _fmt_size(size: int) -> str:

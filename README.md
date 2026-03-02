@@ -1,6 +1,6 @@
 # MacSCP
 
-A WinSCP-style SFTP client for macOS, written in Python (tkinter + paramiko).
+A WinSCP-style SFTP client for macOS, written in Python (PyQt6 + paramiko).
 
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
 ![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
@@ -42,6 +42,7 @@ A WinSCP-style SFTP client for macOS, written in Python (tkinter + paramiko).
 
 - macOS 12+ (uses `osascript` for Terminal integration)
 - Python 3.10+
+- [PyQt6](https://pypi.org/project/PyQt6/) ≥ 6.5
 - [paramiko](https://www.paramiko.org/) ≥ 3.0
 - VS Code with `code` in PATH — only needed for "Edit in VS Code"
 
@@ -50,14 +51,14 @@ A WinSCP-style SFTP client for macOS, written in Python (tkinter + paramiko).
 ```bash
 git clone https://github.com/refap3/macscp.git
 cd macscp
-bash install.sh   # creates .venv and installs paramiko
+bash install.sh   # creates .venv and installs dependencies
 ./macscp          # launches the app
 ```
 
 Or run directly after installing paramiko:
 
 ```bash
-pip install paramiko
+pip install PyQt6 paramiko
 python main.py
 ```
 
@@ -100,6 +101,7 @@ macscp/
 │   ├── ssh_client.py         SSH/SFTP wrapper (paramiko)
 │   └── session_manager.py    Saved-session persistence (~/.macscp/sessions.json)
 └── gui/
+    ├── _invoke.py            Thread-safe main-thread callback helper
     ├── app.py                Main window, toolbar, session tabs, transfer log
     ├── connection_dialog.py  New-connection modal
     ├── file_panel.py         Dual-purpose file browser panel (local + remote)

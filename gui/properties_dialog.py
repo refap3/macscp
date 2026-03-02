@@ -1,62 +1,63 @@
-"""File/directory properties dialog."""
+"""File/directory properties dialog (PyQt6)."""
 
-import tkinter as tk
-from tkinter import ttk
+from PyQt6.QtWidgets import (
+    QDialog, QVBoxLayout, QGridLayout, QLabel, QPushButton, QWidget,
+)
+from PyQt6.QtCore import Qt
 
 
-class PropertiesDialog(tk.Toplevel):
+class PropertiesDialog(QDialog):
     """Show detailed info for a file or directory entry."""
 
-    def __init__(self, parent: tk.Widget, entry: dict):
+    def __init__(self, parent: QWidget, entry: dict):
         super().__init__(parent)
-        self.title(f"Properties — {entry['name']}")
-        self.resizable(False, False)
-        self.transient(parent)
-        self.grab_set()
+        self.setWindowTitle(f"Properties — {entry['name']}")
+        self.setFixedWidth(420)
+        self.setModal(True)
 
         self._build_ui(entry)
-        self._center(parent)
-        self.wait_window()
 
     def _build_ui(self, e: dict) -> None:
-        f = ttk.Frame(self, padding=20)
-        f.pack(fill=tk.BOTH, expand=True)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
 
-        icon = "📁" if e.get("is_dir") else "📄"
-        ttk.Label(f, text=icon, font=("TkDefaultFont", 32)).grid(
-            row=0, column=0, columnspan=2, pady=(0, 8)
-        )
+        # Icon
+        icon_text = "Directory" if e.get("is_dir") else "File"
+        icon_label = QLabel(icon_text)
+        icon_label.setStyleSheet("font-size: 18px; font-weight: bold;")
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(icon_label)
+
+        # Properties grid
+        grid = QGridLayout()
+        grid.setSpacing(6)
 
         rows = [
-            ("Name:",        e.get("name", "")),
-            ("Path:",        e.get("path", "")),
-            ("Type:",        "Directory" if e.get("is_dir") else "File"),
-            ("Size:",        _fmt_size(e.get("size", 0)) if not e.get("is_dir") else "—"),
-            ("Modified:",    _fmt_date(e.get("modified"))),
+            ("Name:", e.get("name", "")),
+            ("Path:", e.get("path", "")),
+            ("Type:", "Directory" if e.get("is_dir") else "File"),
+            ("Size:", _fmt_size(e.get("size", 0)) if not e.get("is_dir") else "—"),
+            ("Modified:", _fmt_date(e.get("modified"))),
             ("Permissions:", e.get("permissions") or "—"),
         ]
 
-        for i, (label, value) in enumerate(rows, start=1):
-            ttk.Label(f, text=label, foreground="#555", anchor="e").grid(
-                row=i, column=0, sticky="e", padx=(0, 8), pady=3
-            )
-            # Selectable value label via Text widget
-            t = tk.Text(f, height=1, width=48, relief="flat",
-                        background=f.cget("background"), font=("TkDefaultFont", 12))
-            t.insert("1.0", value)
-            t.config(state="disabled")
-            t.grid(row=i, column=1, sticky="w", pady=3)
+        for i, (label, value) in enumerate(rows):
+            lbl = QLabel(label)
+            lbl.setStyleSheet("color: #555; font-weight: bold;")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+            grid.addWidget(lbl, i, 0)
 
-        ttk.Button(f, text="Close", command=self.destroy).grid(
-            row=len(rows) + 1, column=0, columnspan=2, pady=(12, 0)
-        )
+            val = QLabel(str(value))
+            val.setWordWrap(True)
+            val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            grid.addWidget(val, i, 1)
 
-    def _center(self, parent: tk.Widget) -> None:
-        self.update_idletasks()
-        px, py = parent.winfo_rootx(), parent.winfo_rooty()
-        pw, ph = parent.winfo_width(), parent.winfo_height()
-        w, h = self.winfo_width(), self.winfo_height()
-        self.geometry(f"+{px + (pw - w) // 2}+{py + (ph - h) // 2}")
+        layout.addLayout(grid)
+
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
 
 def _fmt_size(size: int) -> str:

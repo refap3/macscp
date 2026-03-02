@@ -1,4 +1,4 @@
-"""Dual-purpose file browser panel (local or remote)."""
+"""Dual-purpose file browser panel (local or remote) using PyQt6."""
 
 import json
 import os
@@ -10,9 +10,16 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog, messagebox, simpledialog
-import tkinter as tk
-from tkinter import ttk
+
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
+    QLabel, QLineEdit, QPushButton, QMenu, QMessageBox, QInputDialog,
+    QHeaderView, QAbstractItemView, QDialog, QTextEdit, QScrollBar,
+)
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QAction, QColor, QFont
+
+from gui._invoke import invoke_in_main
 
 BOOKMARKS_FILE = os.path.expanduser("~/.macscp/bookmarks.json")
 
@@ -33,19 +40,16 @@ def local_list_dir(path: str) -> list[dict]:
     entries = []
     for item in items:
         try:
-            # Use the DirEntry cached lstat (follow_symlinks=False) so we never
-            # block on iCloud / network-volume metadata fetches per file.
             s = item.stat(follow_symlinks=False)
             is_dir = stat.S_ISDIR(s.st_mode)
-            # For symlinks to dirs, is_dir via mode is False; check the link target.
             if not is_dir and stat.S_ISLNK(s.st_mode):
                 is_dir = item.is_dir(follow_symlinks=True)
             entries.append({
-                "name":        item.name,
-                "path":        item.path,
-                "is_dir":      is_dir,
-                "size":        s.st_size if not is_dir else 0,
-                "modified":    datetime.fromtimestamp(s.st_mtime),
+                "name": item.name,
+                "path": item.path,
+                "is_dir": is_dir,
+                "size": s.st_size if not is_dir else 0,
+                "modified": datetime.fromtimestamp(s.st_mtime),
                 "permissions": oct(stat.S_IMODE(s.st_mode)),
             })
         except Exception:
@@ -95,36 +99,26 @@ def _save_bookmarks(bm: list[dict]) -> None:
 # FilePanel
 # ---------------------------------------------------------------------------
 
-class FilePanel(ttk.Frame):
+class FilePanel(QWidget):
     """File-browser panel that works for both local and remote filesystems."""
 
-    # ---- Class-level drag-and-drop state (shared across all instances) ----
-    _dnd_active: bool = False
-    _dnd_source: "FilePanel | None" = None
-    _dnd_entries: list[dict] = []
-    _dnd_start_xy: tuple[int, int] | None = None
-    _dnd_last_motion_t: float = 0.0   # throttle: skip motion events < 16 ms apart
+    # Signal emitted when navigation finishes (for status updates)
+    status_changed = pyqtSignal(str)
 
-    def __init__(self, parent, is_remote: bool = False, ssh_client=None):
+    def __init__(self, is_remote: bool = False, parent=None):
         super().__init__(parent)
         self.is_remote = is_remote
-        self._ssh = ssh_client
-
+        self._ssh = None
         self._current_path = ""
-        self._history: list[str] = []
-        self._hist_idx = -1
-        self._entries: list[dict] = []        # all entries in current dir
-        self._filtered: list[dict] = []       # after apply_filter
-        self._item_map: dict[str, dict] = {}  # tree iid -> entry
-
+        self._entries: list[dict] = []
+        self._filtered: list[dict] = []
         self._show_hidden = False
         self._filter_text = ""
-        self._navigating = False      # guard against concurrent remote fetches
-        self._filter_after_id = None  # debounce timer for filter entry
-
-        self._sort_col = "name"
+        self._sort_col = 0
         self._sort_rev = False
-        self._hidden_count = 0        # cached so _populate_tree doesn't recount
+        self._history: list[str] = []
+        self._hist_idx = -1
+        self._navigating = False
 
         self._build_ui()
 
@@ -140,11 +134,12 @@ class FilePanel(ttk.Frame):
 
     def navigate_to_home(self) -> None:
         if self.is_remote and self._ssh:
-            # get_home_dir() is an SSH call — run off the main thread
-            self._status.set("Loading…")
+            self._set_status("Loading…")
+
             def fetch():
                 home = self._ssh.get_home_dir()
-                self.after(0, lambda: self._navigate_to(home))
+                invoke_in_main(lambda: self._navigate_to(home))
+
             threading.Thread(target=fetch, daemon=True).start()
         elif not self.is_remote:
             self._navigate_to(str(Path.home()))
@@ -153,200 +148,158 @@ class FilePanel(ttk.Frame):
         return self._current_path
 
     def get_selected_entries(self) -> list[dict]:
-        return [self._item_map[iid] for iid in self._tree.selection() if iid in self._item_map]
+        result = []
+        for item in self._tree.selectedItems():
+            idx = self._tree.indexOfTopLevelItem(item)
+            if 0 <= idx < len(self._filtered):
+                result.append(self._filtered[idx])
+        return result
 
     def refresh(self) -> None:
         if self._current_path:
             self._navigate_to(self._current_path, add_history=False)
 
-    def _run_ssh(self, fn, on_done=None, status="Working…") -> None:
-        """Run fn() in a background thread; call on_done() on the main thread when finished."""
-        self._status.set(status)
-        def worker():
-            err = None
-            result = None
-            try:
-                result = fn()
-            except Exception as exc:
-                err = str(exc)
-            def finish():
-                if err:
-                    messagebox.showerror("Error", err, parent=self)
-                    self._status.set("Error")
-                elif on_done:
-                    on_done(result)
-            self.after(0, finish)
-        threading.Thread(target=worker, daemon=True).start()
-
     def show_disconnected(self) -> None:
-        self._tree.delete(*self._tree.get_children())
-        self._item_map.clear()
-        self._status.set("Not connected")
+        self._tree.clear()
+        self._entries.clear()
+        self._filtered.clear()
+        self._set_status("Not connected")
 
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        # Header row
-        hf = ttk.Frame(self)
-        hf.pack(fill=tk.X, padx=4, pady=(4, 0))
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
 
-        label = "Remote" if self.is_remote else "Local"
-        ttk.Label(hf, text=label, font=("TkDefaultFont", 11, "bold")).pack(side=tk.LEFT)
+        # Header
+        header = QHBoxLayout()
+        label = QLabel("Remote" if self.is_remote else "Local")
+        label.setStyleSheet("font-weight: bold; font-size: 13px;")
+        header.addWidget(label)
+        header.addStretch()
 
-        # Bookmarks button
-        self._bm_btn = ttk.Menubutton(hf, text="★ Bookmarks", direction="below")
-        self._bm_btn.pack(side=tk.RIGHT)
-        self._bm_menu = tk.Menu(self._bm_btn, tearoff=0)
-        self._bm_btn["menu"] = self._bm_menu
-        self._rebuild_bm_menu()
+        self._bookmark_btn = QPushButton("Bookmarks")
+        self._bookmark_btn.clicked.connect(self._show_bookmarks_menu)
+        header.addWidget(self._bookmark_btn)
+        layout.addLayout(header)
 
-        # Path bar
-        pf = ttk.Frame(self)
-        pf.pack(fill=tk.X, padx=4, pady=2)
+        # Navigation bar
+        nav = QHBoxLayout()
 
-        self._btn_back = ttk.Button(pf, text="◀", width=3, command=self._go_back, state="disabled")
-        self._btn_back.pack(side=tk.LEFT)
-        ttk.Button(pf, text="▲", width=3, command=self._go_up).pack(side=tk.LEFT, padx=2)
-        ttk.Button(pf, text="⌂", width=3, command=self.navigate_to_home).pack(side=tk.LEFT)
-        ttk.Button(pf, text="⟳", width=3, command=self.refresh).pack(side=tk.LEFT, padx=2)
+        self._back_btn = QPushButton("<")
+        self._back_btn.setFixedWidth(30)
+        self._back_btn.setEnabled(False)
+        self._back_btn.clicked.connect(self._go_back)
+        nav.addWidget(self._back_btn)
 
-        self._path_var = tk.StringVar()
-        pe = ttk.Entry(pf, textvariable=self._path_var)
-        pe.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
-        pe.bind("<Return>", self._on_path_enter)
+        self._up_btn = QPushButton("^")
+        self._up_btn.setFixedWidth(30)
+        self._up_btn.clicked.connect(self._go_up)
+        nav.addWidget(self._up_btn)
 
-        # Controls bar: filter + hidden toggle
-        cf = ttk.Frame(self)
-        cf.pack(fill=tk.X, padx=4, pady=(0, 2))
+        self._home_btn = QPushButton("~")
+        self._home_btn.setFixedWidth(30)
+        self._home_btn.clicked.connect(self.navigate_to_home)
+        nav.addWidget(self._home_btn)
 
-        ttk.Label(cf, text="Filter:").pack(side=tk.LEFT)
-        self._filter_var = tk.StringVar()
-        self._filter_var.trace_add("write", lambda *_: self._on_filter_change())
-        filter_entry = ttk.Entry(cf, textvariable=self._filter_var, width=18)
-        filter_entry.pack(side=tk.LEFT, padx=(4, 8))
+        self._refresh_btn = QPushButton("Refresh")
+        self._refresh_btn.clicked.connect(self.refresh)
+        nav.addWidget(self._refresh_btn)
 
-        self._hidden_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            cf, text="Show hidden", variable=self._hidden_var,
-            command=self._on_hidden_toggle
-        ).pack(side=tk.LEFT)
+        self._path_edit = QLineEdit()
+        self._path_edit.returnPressed.connect(self._on_path_enter)
+        nav.addWidget(self._path_edit)
 
-        # Treeview
-        tf = ttk.Frame(self)
-        tf.pack(fill=tk.BOTH, expand=True, padx=4, pady=2)
+        layout.addLayout(nav)
 
-        vsb = ttk.Scrollbar(tf, orient=tk.VERTICAL)
-        hsb = ttk.Scrollbar(tf, orient=tk.HORIZONTAL)
+        # Filter bar
+        filter_bar = QHBoxLayout()
+        filter_bar.addWidget(QLabel("Filter:"))
+        self._filter_edit = QLineEdit()
+        self._filter_edit.setPlaceholderText("Type to filter…")
+        self._filter_edit.textChanged.connect(self._on_filter_changed)
+        filter_bar.addWidget(self._filter_edit)
 
-        self._tree = ttk.Treeview(
-            tf,
-            columns=("name", "size", "modified", "perms"),
-            show="headings",
-            selectmode="extended",
-            yscrollcommand=vsb.set,
-            xscrollcommand=hsb.set,
-        )
+        self._hidden_btn = QPushButton("Show Hidden")
+        self._hidden_btn.setCheckable(True)
+        self._hidden_btn.toggled.connect(self._on_hidden_toggle)
+        filter_bar.addWidget(self._hidden_btn)
+        layout.addLayout(filter_bar)
 
-        self._tree.heading("name",     text="Name ↕",      command=lambda: self._sort("name"))
-        self._tree.heading("size",     text="Size",         command=lambda: self._sort("size"))
-        self._tree.heading("modified", text="Modified",     command=lambda: self._sort("modified"))
-        self._tree.heading("perms",    text="Permissions",  command=lambda: self._sort("perms"))
+        # Tree widget
+        self._tree = QTreeWidget()
+        self._tree.setHeaderLabels(["Name", "Size", "Modified", "Permissions"])
+        self._tree.setRootIsDecorated(False)
+        self._tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._tree.setAlternatingRowColors(True)
+        self._tree.setSortingEnabled(False)
+        self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._tree.customContextMenuRequested.connect(self._show_context_menu)
+        self._tree.itemDoubleClicked.connect(self._on_double_click)
 
-        self._tree.column("name",     width=240, minwidth=120)
-        self._tree.column("size",     width=80,  minwidth=60, anchor="e")
-        self._tree.column("modified", width=130, minwidth=100)
-        self._tree.column("perms",    width=80,  minwidth=60)
+        # Column widths
+        hdr = self._tree.header()
+        hdr.setStretchLastSection(False)
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.sectionClicked.connect(self._on_header_click)
 
-        vsb.config(command=self._tree.yview)
-        hsb.config(command=self._tree.xview)
-
-        self._tree.grid(row=0, column=0, sticky="nsew")
-        vsb.grid(row=0, column=1, sticky="ns")
-        hsb.grid(row=1, column=0, sticky="ew")
-        tf.rowconfigure(0, weight=1)
-        tf.columnconfigure(0, weight=1)
-
-        # Tag styling — plain files get no tag (fastest path through Tk renderer)
-        self._tree.tag_configure("dir",        foreground="#1565C0")
-        self._tree.tag_configure("hidden",     foreground="#888888")
-        self._tree.tag_configure("hidden_dir", foreground="#7B9FCC")
-
-        # Events
-        self._tree.bind("<Double-Button-1>",  self._on_double_click)
-        self._tree.bind("<Return>",           self._on_double_click)
-        self._tree.bind("<Button-2>",         self._show_context_menu)
-        self._tree.bind("<Button-3>",         self._show_context_menu)
-        self._tree.bind("<<TreeviewSelect>>", self._on_select)
-        self._tree.bind("<Delete>",           lambda _: self._delete_selected())
-        self._tree.bind("<BackSpace>",        lambda _: self._go_up())
-        self._tree.bind("<F5>",               lambda _: self.refresh())
-        self._tree.bind("<F2>",               lambda _: self._rename_selected())
-        self._tree.bind("<Command-a>",        lambda _: self._select_all())
-        self._tree.bind("<Command-c>",        lambda _: self._copy_path())
-
-        # Drag-and-drop
-        self._tree.bind("<ButtonPress-1>",   self._dnd_press)
-        self._tree.bind("<B1-Motion>",       self._dnd_motion)
-        self._tree.bind("<ButtonRelease-1>", self._dnd_release)
+        layout.addWidget(self._tree)
 
         # Status bar
-        self._status = tk.StringVar(value="")
-        ttk.Label(self, textvariable=self._status, anchor="w").pack(
-            fill=tk.X, padx=4, pady=(0, 2)
-        )
+        self._status_label = QLabel("")
+        self._status_label.setStyleSheet("color: #666; font-size: 11px;")
+        layout.addWidget(self._status_label)
 
     # ------------------------------------------------------------------
     # Navigation
     # ------------------------------------------------------------------
 
     def _navigate_to(self, path: str, add_history: bool = True) -> None:
-        if self.is_remote:
-            if not self._ssh or not self._ssh.connected:
-                self.show_disconnected()
-                return
-            # Remote: I/O in background thread; guard against concurrent fetches.
-            if self._navigating:
-                return
-            self._navigating = True
-            self._status.set(f"Loading {path} …")
+        if self._navigating:
+            return
+        self._navigating = True
+        self._set_status(f"Loading {path}…")
 
-            def fetch():
-                try:
-                    entries = self._ssh.list_directory(path)
-                    if self.winfo_exists():
-                        self.after(0, lambda: self._finish_navigate(path, entries, add_history))
-                except Exception as exc:
-                    if self.winfo_exists():
-                        self.after(0, lambda e=str(exc): self._navigate_error(e))
-
-            threading.Thread(target=fetch, daemon=True).start()
-        else:
-            # Local: synchronous — lstat-only so iCloud/network volumes don't block.
+        def fetch():
             try:
-                entries = local_list_dir(path)
-                self._finish_navigate(path, entries, add_history)
+                if self.is_remote:
+                    if not self._ssh or not self._ssh.connected:
+                        raise RuntimeError("Not connected")
+                    entries = self._ssh.list_directory(path)
+                else:
+                    entries = local_list_dir(path)
+                invoke_in_main(lambda: self._finish_navigate(path, entries, add_history))
             except Exception as exc:
-                messagebox.showerror("Error", str(exc), parent=self)
+                msg = str(exc)
+                invoke_in_main(lambda: self._navigate_error(msg))
+
+        threading.Thread(target=fetch, daemon=True).start()
 
     def _finish_navigate(self, path: str, entries: list[dict], add_history: bool) -> None:
         self._navigating = False
-        if add_history:
-            if self._hist_idx < len(self._history) - 1:
-                self._history = self._history[: self._hist_idx + 1]
-            self._history.append(path)
-            self._hist_idx = len(self._history) - 1
         self._current_path = path
         self._entries = entries
-        self._path_var.set(path)
-        self._btn_back.config(state="normal" if self._hist_idx > 0 else "disabled")
+        self._path_edit.setText(path)
+
+        if add_history:
+            if self._hist_idx < len(self._history) - 1:
+                self._history = self._history[:self._hist_idx + 1]
+            self._history.append(path)
+            self._hist_idx = len(self._history) - 1
+
+        self._back_btn.setEnabled(self._hist_idx > 0)
         self._apply_filter()
 
     def _navigate_error(self, error: str) -> None:
         self._navigating = False
-        self._status.set("Error")
-        messagebox.showerror("Error", error, parent=self)
+        self._set_status("Error")
+        QMessageBox.critical(self, "Error", error)
 
     def _go_back(self) -> None:
         if self._hist_idx > 0:
@@ -364,242 +317,134 @@ class FilePanel(ttk.Frame):
         if parent != self._current_path:
             self._navigate_to(parent)
 
-    def _on_path_enter(self, _event=None) -> None:
-        path = self._path_var.get().strip()
+    def _on_path_enter(self) -> None:
+        path = self._path_edit.text().strip()
         if path:
             self._navigate_to(path)
 
     # ------------------------------------------------------------------
-    # Filter & hidden files
+    # Filter & display
     # ------------------------------------------------------------------
 
-    def _on_filter_change(self) -> None:
-        # Debounce: wait 80 ms after the last keystroke before rebuilding the list.
-        if self._filter_after_id is not None:
-            self.after_cancel(self._filter_after_id)
-        self._filter_after_id = self.after(80, self._apply_filter_committed)
-
-    def _apply_filter_committed(self) -> None:
-        self._filter_after_id = None
-        self._filter_text = self._filter_var.get().lower()
+    def _on_filter_changed(self, text: str) -> None:
+        self._filter_text = text.lower()
         self._apply_filter()
 
-    def _on_hidden_toggle(self) -> None:
-        self._show_hidden = self._hidden_var.get()
+    def _on_hidden_toggle(self, checked: bool) -> None:
+        self._show_hidden = checked
         self._apply_filter()
 
     def _apply_filter(self) -> None:
-        """Filter entries and rebuild the treeview."""
         entries = self._entries
-
-        # Count hidden items once here (before hidden filter) and cache it.
-        self._hidden_count = sum(1 for e in entries if e["name"].startswith("."))
-
         if not self._show_hidden:
             entries = [e for e in entries if not e["name"].startswith(".")]
-
         if self._filter_text:
             entries = [e for e in entries if self._filter_text in e["name"].lower()]
-
         self._filtered = entries
         self._populate_tree()
 
-    # ------------------------------------------------------------------
-    # Tree population & sorting
-    # ------------------------------------------------------------------
-
     def _populate_tree(self) -> None:
-        # Suppress <<TreeviewSelect>> while we clear+rebuild so _on_select
-        # doesn't fire mid-delete and issue extra Tcl round-trips.
-        self._tree.unbind("<<TreeviewSelect>>")
-        try:
-            children = self._tree.get_children()
-            if children:
-                self._tree.delete(*children)
-            self._item_map.clear()
+        self._tree.clear()
+        dir_color = QColor("#1565C0")
+        hidden_color = QColor("#888888")
+        hidden_dir_color = QColor("#7B9FCC")
 
-            for i, entry in enumerate(self._filtered):
-                iid = f"row_{i}"
-                self._item_map[iid] = entry
-                is_hidden = entry["name"].startswith(".")
-                mod = (entry["modified"].strftime("%Y-%m-%d %H:%M")
-                       if entry.get("modified") else "")
+        for entry in self._filtered:
+            name = entry["name"]
+            size_str = _fmt_size(entry.get("size", 0), entry["is_dir"])
+            mod = entry.get("modified")
+            mod_str = mod.strftime("%Y-%m-%d %H:%M") if mod else ""
+            perms = entry.get("permissions", "")
 
-                if is_hidden:
-                    tags = ("hidden_dir",) if entry["is_dir"] else ("hidden",)
-                elif entry["is_dir"]:
-                    tags = ("dir",)
-                else:
-                    tags = ()          # plain file — no tag needed
+            item = QTreeWidgetItem([name, size_str, mod_str, perms])
 
-                self._tree.insert(
-                    "", "end", iid=iid,
-                    values=(
-                        entry["name"],
-                        _fmt_size(entry["size"], entry["is_dir"]),
-                        mod,
-                        entry.get("permissions", ""),
-                    ),
-                    tags=tags,
-                )
-        finally:
-            self._tree.bind("<<TreeviewSelect>>", self._on_select)
+            is_hidden = name.startswith(".")
+            if is_hidden and entry["is_dir"]:
+                item.setForeground(0, hidden_dir_color)
+            elif is_hidden:
+                item.setForeground(0, hidden_color)
+            elif entry["is_dir"]:
+                item.setForeground(0, dir_color)
 
-        n_total = len(self._entries)
-        n_shown = len(self._filtered)
-        hc = self._hidden_count  # pre-computed in _apply_filter
+            # Right-align size column
+            item.setTextAlignment(1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
+            self._tree.addTopLevelItem(item)
+
+        n = len(self._filtered)
+        total = len(self._entries)
+        hidden_count = total - len([e for e in self._entries if not e["name"].startswith(".")])
         if self._filter_text:
-            self._status.set(f"{n_shown} match{'es' if n_shown != 1 else ''} / {n_total} items")
-        elif not self._show_hidden and hc:
-            self._status.set(f"{n_shown} items ({hc} hidden)")
+            self._set_status(f"{n} match{'es' if n != 1 else ''} / {total} items")
+        elif not self._show_hidden and hidden_count:
+            self._set_status(f"{n} items ({hidden_count} hidden)")
         else:
-            self._status.set(f"{n_total} item{'s' if n_total != 1 else ''}")
+            self._set_status(f"{n} item{'s' if n != 1 else ''}")
 
-    def _sort(self, col: str) -> None:
-        rev = (not self._sort_rev) if self._sort_col == col else False
-        self._sort_col = col
-        self._sort_rev = rev
-
-        # Update heading arrow
-        arrows = {"name": "Name ↕", "size": "Size ↕", "modified": "Modified ↕", "perms": "Permissions ↕"}
-        for c, base in [("name", "Name"), ("size", "Size"), ("modified", "Modified"), ("perms", "Permissions")]:
-            marker = (" ▲" if not rev else " ▼") if c == col else " ↕"
-            self._tree.heading(c, text=base + marker)
+    def _on_header_click(self, col: int) -> None:
+        if self._sort_col == col:
+            self._sort_rev = not self._sort_rev
+        else:
+            self._sort_col = col
+            self._sort_rev = False
 
         key_fns = {
-            "name":     lambda x: (not x["is_dir"], x["name"].lower()),
-            "size":     lambda x: (not x["is_dir"], x["size"]),
-            "modified": lambda x: (not x["is_dir"], x.get("modified") or datetime.min),
-            "perms":    lambda x: (not x["is_dir"], x.get("permissions", "")),
+            0: lambda x: (not x["is_dir"], x["name"].lower()),
+            1: lambda x: (not x["is_dir"], x.get("size", 0)),
+            2: lambda x: (not x["is_dir"], x.get("modified") or datetime.min),
+            3: lambda x: (not x["is_dir"], x.get("permissions", "")),
         }
-        self._entries.sort(key=key_fns.get(col, key_fns["name"]), reverse=rev)
+        key = key_fns.get(col, key_fns[0])
+        self._entries.sort(key=key, reverse=self._sort_rev)
         self._apply_filter()
 
     # ------------------------------------------------------------------
     # Events
     # ------------------------------------------------------------------
 
-    def _on_double_click(self, event=None) -> None:
-        # Ignore if this was a drag
-        if FilePanel._dnd_active:
-            return
-        sel = self._tree.selection()
-        if not sel:
-            return
-        entry = self._item_map.get(sel[0])
-        if entry and entry["is_dir"]:
-            self._navigate_to(entry["path"])
-
-    def _on_select(self, _event=None) -> None:
-        n_sel = len(self._tree.selection())
-        total = len(self._filtered)
-        if n_sel:
-            self._status.set(f"{n_sel} selected / {total} items")
-        else:
-            n_total = len(self._entries)
-            self._status.set(f"{total} item{'s' if total != 1 else ''}"
-                             + (f" ({n_total - total} hidden)" if total < n_total else ""))
-
-    def _select_all(self) -> None:
-        children = self._tree.get_children()
-        if children:
-            self._tree.selection_set(children)
-
-    def _copy_path(self) -> None:
-        selected = self.get_selected_entries()
-        if selected:
-            paths = "\n".join(e["path"] for e in selected)
-        else:
-            paths = self._current_path
-        self.clipboard_clear()
-        self.clipboard_append(paths)
-
-    # ------------------------------------------------------------------
-    # Drag and drop
-    # ------------------------------------------------------------------
-
-    def _dnd_press(self, event) -> None:
-        FilePanel._dnd_start_xy = (event.x_root, event.y_root)
-        FilePanel._dnd_active = False
-
-    def _dnd_motion(self, event) -> None:
-        if FilePanel._dnd_start_xy is None:
-            return
-
-        # Throttle: process at most ~60 fps to avoid flooding the event queue
-        now = time.monotonic()
-        if now - FilePanel._dnd_last_motion_t < 0.016:
-            return
-        FilePanel._dnd_last_motion_t = now
-
-        dx = abs(event.x_root - FilePanel._dnd_start_xy[0])
-        dy = abs(event.y_root - FilePanel._dnd_start_xy[1])
-        if dx < 8 and dy < 8:
-            return
-
-        if not FilePanel._dnd_active:
-            selected = self.get_selected_entries()
-            if not selected:
-                return
-            FilePanel._dnd_active = True
-            FilePanel._dnd_source = self
-            FilePanel._dnd_entries = list(selected)
-            # Disable selection changes during drag so <<TreeviewSelect>> doesn't
-            # fire on every pixel (which causes the treeview to redraw constantly).
-            self._tree.config(cursor="hand2", selectmode="none")
-            n = len(selected)
-            label = selected[0]["name"] if n == 1 else f"{n} items"
-            self._status.set(f"Dragging: {label}  —  drop on the other panel to transfer")
-
-    def _dnd_release(self, event) -> None:
-        FilePanel._dnd_start_xy = None
-        if not FilePanel._dnd_active:
-            return
-        self._tree.config(cursor="", selectmode="extended")
-        FilePanel._dnd_active = False
-        # MacSCPApp root binding handles the actual drop
+    def _on_double_click(self, item: QTreeWidgetItem, column: int) -> None:
+        idx = self._tree.indexOfTopLevelItem(item)
+        if 0 <= idx < len(self._filtered):
+            entry = self._filtered[idx]
+            if entry["is_dir"]:
+                self._navigate_to(entry["path"])
 
     # ------------------------------------------------------------------
     # Context menu
     # ------------------------------------------------------------------
 
-    def _show_context_menu(self, event) -> None:
-        row = self._tree.identify_row(event.y)
-        if row and row not in self._tree.selection():
-            self._tree.selection_set(row)
-
+    def _show_context_menu(self, pos) -> None:
         selected = self.get_selected_entries()
-        menu = tk.Menu(self, tearoff=0)
+        menu = QMenu(self)
 
         if len(selected) == 1:
-            e = selected[0]
-            if e["is_dir"]:
-                menu.add_command(label="Open", command=lambda: self._navigate_to(e["path"]))
+            entry = selected[0]
+            if entry["is_dir"]:
+                menu.addAction("Open", lambda: self._navigate_to(entry["path"]))
             else:
-                menu.add_command(label="Edit in VSCode",  command=lambda: self._edit_vscode(e))
-                menu.add_command(label="View contents",   command=lambda: self._view_file(e))
-            menu.add_command(label="Properties",          command=lambda: self._show_properties(e))
-            menu.add_separator()
+                menu.addAction("Edit in VSCode", lambda: self._edit_vscode(entry))
+                menu.addAction("View contents", lambda: self._view_file(entry))
+            menu.addAction("Properties", lambda: self._show_properties(entry))
+            menu.addSeparator()
 
         if selected:
-            menu.add_command(label="Copy Path",  command=self._copy_path)
-            menu.add_command(label="Delete",     command=self._delete_selected)
-            menu.add_command(label="Rename… F2", command=self._rename_selected)
-            menu.add_separator()
+            menu.addAction("Copy Path", self._copy_path)
+            menu.addAction("Delete", self._delete_selected)
+            menu.addAction("Rename…", self._rename_selected)
+            menu.addSeparator()
 
-        menu.add_command(label="Select All  ⌘A",  command=self._select_all)
-        menu.add_separator()
-        menu.add_command(label="New Folder…",     command=self._new_folder)
-        menu.add_command(label="New File…",       command=self._new_file)
-        menu.add_separator()
-        menu.add_command(label="Add Bookmark ★",  command=self._add_bookmark)
-        menu.add_separator()
-        menu.add_command(label="Open Terminal Here", command=self._open_terminal)
-        menu.add_separator()
-        menu.add_command(label="Refresh  F5",     command=self.refresh)
+        menu.addAction("Select All", self._select_all)
+        menu.addSeparator()
+        menu.addAction("New Folder…", self._new_folder)
+        menu.addAction("New File…", self._new_file)
+        menu.addSeparator()
+        menu.addAction("Add Bookmark", self._add_bookmark)
+        menu.addSeparator()
+        menu.addAction("Open Terminal", self._open_terminal)
+        menu.addSeparator()
+        menu.addAction("Refresh", self.refresh)
 
-        menu.tk_popup(event.x_root, event.y_root)
+        menu.exec(self._tree.viewport().mapToGlobal(pos))
 
     # ------------------------------------------------------------------
     # File operations
@@ -611,7 +456,8 @@ class FilePanel(ttk.Frame):
             return
         names = [e["name"] for e in selected]
         msg = f"Delete '{names[0]}'?" if len(names) == 1 else f"Delete {len(names)} items?"
-        if not messagebox.askyesno("Confirm Delete", msg, parent=self):
+        reply = QMessageBox.question(self, "Confirm Delete", msg)
+        if reply != QMessageBox.StandardButton.Yes:
             return
 
         if self.is_remote:
@@ -627,8 +473,8 @@ class FilePanel(ttk.Frame):
                         errors.append(f"{e['name']}: {exc}")
                 if errors:
                     raise Exception("\n".join(errors))
-            self._run_ssh(do_delete, on_done=lambda _: self.refresh(),
-                          status=f"Deleting {len(selected)} item(s)…")
+
+            self._run_threaded(do_delete, lambda _: self.refresh(), "Deleting…")
         else:
             errors = []
             for e in selected:
@@ -640,157 +486,90 @@ class FilePanel(ttk.Frame):
                 except Exception as exc:
                     errors.append(f"{e['name']}: {exc}")
             if errors:
-                messagebox.showerror("Delete errors", "\n".join(errors), parent=self)
+                QMessageBox.critical(self, "Error", "\n".join(errors))
             self.refresh()
 
     def _rename_selected(self) -> None:
         selected = self.get_selected_entries()
         if len(selected) != 1:
-            messagebox.showinfo("Rename", "Select exactly one item to rename.", parent=self)
+            QMessageBox.information(self, "Rename", "Select exactly one item to rename.")
             return
-        e = selected[0]
-        new_name = simpledialog.askstring(
-            "Rename", f"New name for '{e['name']}':", initialvalue=e["name"], parent=self
-        )
-        if not new_name or new_name == e["name"]:
+        entry = selected[0]
+        new_name, ok = QInputDialog.getText(self, "Rename", f"New name for '{entry['name']}':",
+                                            text=entry["name"])
+        if not ok or not new_name or new_name == entry["name"]:
             return
 
-        new_path = (
-            self._current_path.rstrip("/") + "/" + new_name
-            if self.is_remote
-            else os.path.join(self._current_path, new_name)
-        )
         if self.is_remote:
-            self._run_ssh(
-                lambda: self._ssh.rename(e["path"], new_path),
-                on_done=lambda _: self.refresh(),
-                status=f"Renaming {e['name']}…",
+            new_path = self._current_path.rstrip("/") + "/" + new_name
+            self._run_threaded(
+                lambda: self._ssh.rename(entry["path"], new_path),
+                lambda _: self.refresh(),
+                f"Renaming {entry['name']}…"
             )
         else:
+            new_path = os.path.join(self._current_path, new_name)
             try:
-                os.rename(e["path"], new_path)
+                os.rename(entry["path"], new_path)
             except Exception as exc:
-                messagebox.showerror("Rename error", str(exc), parent=self)
+                QMessageBox.critical(self, "Error", str(exc))
             self.refresh()
 
     def _new_folder(self) -> None:
-        name = simpledialog.askstring("New Folder", "Folder name:", parent=self)
-        if not name:
+        name, ok = QInputDialog.getText(self, "New Folder", "Folder name:")
+        if not ok or not name:
             return
-        path = (
-            self._current_path.rstrip("/") + "/" + name
-            if self.is_remote
-            else os.path.join(self._current_path, name)
-        )
         if self.is_remote:
-            self._run_ssh(lambda: self._ssh.mkdir(path),
-                          on_done=lambda _: self.refresh(), status="Creating folder…")
+            path = self._current_path.rstrip("/") + "/" + name
+            self._run_threaded(
+                lambda: self._ssh.mkdir(path),
+                lambda _: self.refresh(),
+                "Creating folder…"
+            )
         else:
+            path = os.path.join(self._current_path, name)
             try:
                 os.makedirs(path, exist_ok=True)
             except Exception as exc:
-                messagebox.showerror("Error", str(exc), parent=self)
+                QMessageBox.critical(self, "Error", str(exc))
             self.refresh()
 
     def _new_file(self) -> None:
-        name = simpledialog.askstring("New File", "File name:", parent=self)
-        if not name:
+        name, ok = QInputDialog.getText(self, "New File", "File name:")
+        if not ok or not name:
             return
-        path = (
-            self._current_path.rstrip("/") + "/" + name
-            if self.is_remote
-            else os.path.join(self._current_path, name)
-        )
         if self.is_remote:
-            self._run_ssh(lambda: self._ssh.create_file(path),
-                          on_done=lambda _: self.refresh(), status="Creating file…")
+            path = self._current_path.rstrip("/") + "/" + name
+            self._run_threaded(
+                lambda: self._ssh.create_file(path),
+                lambda _: self.refresh(),
+                "Creating file…"
+            )
         else:
+            path = os.path.join(self._current_path, name)
             try:
                 open(path, "w").close()
             except Exception as exc:
-                messagebox.showerror("Error", str(exc), parent=self)
+                QMessageBox.critical(self, "Error", str(exc))
             self.refresh()
+
+    def _select_all(self) -> None:
+        self._tree.selectAll()
+
+    def _copy_path(self) -> None:
+        selected = self.get_selected_entries()
+        if selected:
+            from PyQt6.QtWidgets import QApplication
+            paths = "\n".join(e["path"] for e in selected)
+            QApplication.clipboard().setText(paths)
+
+    # ------------------------------------------------------------------
+    # Properties dialog
+    # ------------------------------------------------------------------
 
     def _show_properties(self, entry: dict) -> None:
         from gui.properties_dialog import PropertiesDialog
-        PropertiesDialog(self, entry)
-
-    # ------------------------------------------------------------------
-    # Bookmarks
-    # ------------------------------------------------------------------
-
-    def _add_bookmark(self) -> None:
-        if not self._current_path:
-            return
-        label = simpledialog.askstring(
-            "Add Bookmark",
-            "Bookmark label:",
-            initialvalue=self._current_path.rstrip("/").split("/")[-1] or self._current_path,
-            parent=self,
-        )
-        if not label:
-            return
-        bm = _load_bookmarks()
-        # Avoid duplicates
-        if not any(b["path"] == self._current_path for b in bm):
-            bm.append({"label": label, "path": self._current_path})
-            _save_bookmarks(bm)
-        self._rebuild_bm_menu()
-
-    def _rebuild_bm_menu(self) -> None:
-        self._bm_menu.delete(0, "end")
-        bm = _load_bookmarks()
-        if bm:
-            for b in bm:
-                path = b["path"]
-                self._bm_menu.add_command(
-                    label=f"  {b['label']}  —  {path}",
-                    command=lambda p=path: self._navigate_to(p),
-                )
-            self._bm_menu.add_separator()
-            self._bm_menu.add_command(
-                label="Manage bookmarks…", command=self._manage_bookmarks
-            )
-        else:
-            self._bm_menu.add_command(
-                label="(no bookmarks yet — right-click to add)",
-                state="disabled",
-            )
-        self._bm_menu.add_command(
-            label="Add current path ★", command=self._add_bookmark
-        )
-
-    def _manage_bookmarks(self) -> None:
-        bm = _load_bookmarks()
-        if not bm:
-            messagebox.showinfo("Bookmarks", "No bookmarks saved yet.", parent=self)
-            return
-
-        win = tk.Toplevel(self)
-        win.title("Manage Bookmarks")
-        win.geometry("480x300")
-        win.transient(self)
-        win.grab_set()
-
-        lb = tk.Listbox(win, font=("TkDefaultFont", 11))
-        lb.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        for b in bm:
-            lb.insert("end", f"{b['label']}  →  {b['path']}")
-
-        def delete_selected():
-            sel = lb.curselection()
-            if not sel:
-                return
-            idx = sel[0]
-            bm.pop(idx)
-            _save_bookmarks(bm)
-            lb.delete(idx)
-            self._rebuild_bm_menu()
-
-        bf = ttk.Frame(win)
-        bf.pack(fill=tk.X, padx=10, pady=(0, 10))
-        ttk.Button(bf, text="Delete selected", command=delete_selected).pack(side=tk.LEFT)
-        ttk.Button(bf, text="Close", command=win.destroy).pack(side=tk.RIGHT)
+        PropertiesDialog(self, entry).exec()
 
     # ------------------------------------------------------------------
     # Edit in VSCode
@@ -830,44 +609,108 @@ class FilePanel(ttk.Frame):
 
             threading.Thread(target=_watch, daemon=True).start()
 
-        self._run_ssh(download_and_open, on_done=after_download,
-                      status=f"Downloading {entry['name']} for editing…")
+        self._run_threaded(download_and_open, after_download,
+                           f"Downloading {entry['name']} for editing…")
 
     def _view_file(self, entry: dict) -> None:
         if self.is_remote:
             def fetch():
                 return self._ssh.read_file(entry["path"]).decode("utf-8", errors="replace")
-            self._run_ssh(fetch,
-                          on_done=lambda text: self._open_viewer(entry, text),
-                          status=f"Loading {entry['name']}…")
+            self._run_threaded(fetch, lambda text: self._open_viewer(entry, text),
+                               f"Loading {entry['name']}…")
         else:
             try:
                 with open(entry["path"], "r", errors="replace") as f:
                     text = f.read()
             except Exception as exc:
-                messagebox.showerror("Error", str(exc), parent=self)
+                QMessageBox.critical(self, "Error", str(exc))
                 return
             self._open_viewer(entry, text)
 
     def _open_viewer(self, entry: dict, text: str) -> None:
-        win = tk.Toplevel(self)
-        win.title(entry["name"])
-        win.geometry("760x540")
+        dlg = QDialog(self)
+        dlg.setWindowTitle(entry["name"])
+        dlg.resize(760, 540)
+        layout = QVBoxLayout(dlg)
 
-        # Toolbar
-        tf = ttk.Frame(win)
-        tf.pack(fill=tk.X, padx=6, pady=4)
-        ttk.Label(tf, text=entry["path"], foreground="#555").pack(side=tk.LEFT)
+        path_label = QLabel(entry["path"])
+        path_label.setStyleSheet("color: #555;")
+        layout.addWidget(path_label)
 
-        txt = tk.Text(win, wrap="none", font=("Menlo", 12), undo=False)
-        txt.insert("1.0", text)
-        txt.config(state="disabled")
-        vsb = ttk.Scrollbar(win, orient=tk.VERTICAL, command=txt.yview)
-        hsb = ttk.Scrollbar(win, orient=tk.HORIZONTAL, command=txt.xview)
-        txt.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-        vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        hsb.pack(side=tk.BOTTOM, fill=tk.X)
-        txt.pack(fill=tk.BOTH, expand=True)
+        text_edit = QTextEdit()
+        text_edit.setPlainText(text)
+        text_edit.setReadOnly(True)
+        text_edit.setFont(QFont("Menlo", 12))
+        layout.addWidget(text_edit)
+
+        dlg.show()
+
+    # ------------------------------------------------------------------
+    # Bookmarks
+    # ------------------------------------------------------------------
+
+    def _show_bookmarks_menu(self) -> None:
+        menu = QMenu(self)
+        bm = _load_bookmarks()
+        if bm:
+            for b in bm:
+                path = b["path"]
+                menu.addAction(f"{b.get('label', path)}  —  {path}",
+                               lambda p=path: self._navigate_to(p))
+            menu.addSeparator()
+            menu.addAction("Manage bookmarks…", self._manage_bookmarks)
+        else:
+            action = menu.addAction("(no bookmarks)")
+            action.setEnabled(False)
+        menu.addSeparator()
+        menu.addAction("Add current path", self._add_bookmark)
+        menu.exec(self._bookmark_btn.mapToGlobal(self._bookmark_btn.rect().bottomLeft()))
+
+    def _add_bookmark(self) -> None:
+        if not self._current_path:
+            return
+        label, ok = QInputDialog.getText(
+            self, "Add Bookmark", "Bookmark label:",
+            text=self._current_path.rstrip("/").split("/")[-1] or self._current_path)
+        if not ok or not label:
+            return
+        bm = _load_bookmarks()
+        if not any(b["path"] == self._current_path for b in bm):
+            bm.append({"label": label, "path": self._current_path})
+            _save_bookmarks(bm)
+
+    def _manage_bookmarks(self) -> None:
+        from PyQt6.QtWidgets import QListWidget
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Manage Bookmarks")
+        dlg.resize(480, 300)
+        layout = QVBoxLayout(dlg)
+
+        bm = _load_bookmarks()
+        listw = QListWidget()
+        for b in bm:
+            listw.addItem(f"{b.get('label', '')}  —  {b['path']}")
+        layout.addWidget(listw)
+
+        btn_layout = QHBoxLayout()
+        del_btn = QPushButton("Delete selected")
+
+        def delete_sel():
+            row = listw.currentRow()
+            if row >= 0:
+                bm.pop(row)
+                _save_bookmarks(bm)
+                listw.takeItem(row)
+
+        del_btn.clicked.connect(delete_sel)
+        btn_layout.addWidget(del_btn)
+        btn_layout.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.close)
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+
+        dlg.exec()
 
     # ------------------------------------------------------------------
     # Terminal
@@ -885,3 +728,27 @@ class FilePanel(ttk.Frame):
                 f'tell application "Terminal" to do script "cd \\"{safe}\\""'
             )
             subprocess.Popen(["osascript", "-e", script])
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _set_status(self, msg: str) -> None:
+        self._status_label.setText(msg)
+        self.status_changed.emit(msg)
+
+    def _run_threaded(self, fn, on_done=None, status="Working…") -> None:
+        """Run fn in a background thread; call on_done(result) on the main thread."""
+        self._set_status(status)
+
+        def worker():
+            try:
+                result = fn()
+                if on_done:
+                    invoke_in_main(lambda: on_done(result))
+            except Exception as exc:
+                msg = str(exc)
+                invoke_in_main(lambda: QMessageBox.critical(self, "Error", msg))
+            invoke_in_main(lambda: self._set_status(""))
+
+        threading.Thread(target=worker, daemon=True).start()
