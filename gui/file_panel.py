@@ -16,12 +16,13 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QMenu, QMessageBox, QInputDialog,
     QHeaderView, QAbstractItemView, QDialog, QTextEdit, QScrollBar,
 )
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QAction, QColor, QFont
+from PyQt6.QtCore import Qt, QMimeData, pyqtSignal
+from PyQt6.QtGui import QAction, QColor, QDrag, QFont
 
 from gui._invoke import invoke_in_main
 
 BOOKMARKS_FILE = os.path.expanduser("~/.macscp/bookmarks.json")
+MACSCP_MIME = "application/x-macscp-entries"
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +82,17 @@ def _load_bookmarks() -> list[dict]:
         return []
     try:
         with open(BOOKMARKS_FILE) as f:
-            return json.load(f)
+            data = json.load(f)
+        # Migrate entries whose is_remote tag is wrong due to old buggy swap code:
+        # if a bookmark is tagged local but the path doesn't exist locally, it's remote.
+        changed = False
+        for b in data:
+            if not b.get("is_remote", True) and not os.path.exists(b.get("path", "")):
+                b["is_remote"] = True
+                changed = True
+        if changed:
+            _save_bookmarks(data)
+        return data
     except Exception:
         return []
 
@@ -96,14 +107,80 @@ def _save_bookmarks(bm: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Drag-and-drop tree
+# ---------------------------------------------------------------------------
+
+class FilePanelTree(QTreeWidget):
+    """QTreeWidget with cross-panel drag-and-drop."""
+
+    def __init__(self, panel: "FilePanel"):
+        super().__init__()
+        self._panel = panel
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+
+    # ---- drag source ----
+
+    def startDrag(self, supported_actions):
+        entries = self._panel.get_selected_entries()
+        if not entries:
+            return
+
+        def _ser(e):
+            d = dict(e)
+            if isinstance(d.get("modified"), datetime):
+                d["modified"] = d["modified"].isoformat()
+            return d
+
+        payload = json.dumps([_ser(e) for e in entries]).encode()
+        mime = QMimeData()
+        mime.setData(MACSCP_MIME, payload)
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.exec(Qt.DropAction.CopyAction)
+
+    # ---- drop target ----
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(MACSCP_MIME) and event.source() is not self:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat(MACSCP_MIME) and event.source() is not self:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        if not event.mimeData().hasFormat(MACSCP_MIME) or event.source() is self:
+            event.ignore()
+            return
+        raw = bytes(event.mimeData().data(MACSCP_MIME))
+        entries = json.loads(raw.decode())
+        for e in entries:
+            if e.get("modified"):
+                try:
+                    e["modified"] = datetime.fromisoformat(e["modified"])
+                except Exception:
+                    e["modified"] = None
+        direction = "upload" if self._panel.is_remote else "download"
+        self._panel.transfer_requested.emit(entries, direction)
+        event.acceptProposedAction()
+
+
+# ---------------------------------------------------------------------------
 # FilePanel
 # ---------------------------------------------------------------------------
 
 class FilePanel(QWidget):
     """File-browser panel that works for both local and remote filesystems."""
 
-    # Signal emitted when navigation finishes (for status updates)
     status_changed = pyqtSignal(str)
+    transfer_requested = pyqtSignal(list, str)  # (entries, direction)
 
     def __init__(self, is_remote: bool = False, parent=None):
         super().__init__(parent)
@@ -176,9 +253,9 @@ class FilePanel(QWidget):
 
         # Header
         header = QHBoxLayout()
-        label = QLabel("Remote" if self.is_remote else "Local")
-        label.setStyleSheet("font-weight: bold; font-size: 13px;")
-        header.addWidget(label)
+        self._header_label = QLabel("Remote" if self.is_remote else "Local")
+        self._header_label.setStyleSheet("font-weight: bold; font-size: 13px;")
+        header.addWidget(self._header_label)
         header.addStretch()
 
         self._bookmark_btn = QPushButton("Bookmarks")
@@ -230,7 +307,7 @@ class FilePanel(QWidget):
         layout.addLayout(filter_bar)
 
         # Tree widget
-        self._tree = QTreeWidget()
+        self._tree = FilePanelTree(self)
         self._tree.setHeaderLabels(["Name", "Size", "Modified", "Permissions"])
         self._tree.setRootIsDecorated(False)
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -649,9 +726,13 @@ class FilePanel(QWidget):
     # Bookmarks
     # ------------------------------------------------------------------
 
+    def _my_bookmarks(self) -> list[dict]:
+        return [b for b in _load_bookmarks()
+                if b.get("is_remote", False) == self.is_remote]
+
     def _show_bookmarks_menu(self) -> None:
         menu = QMenu(self)
-        bm = _load_bookmarks()
+        bm = self._my_bookmarks()
         if bm:
             for b in bm:
                 path = b["path"]
@@ -675,8 +756,10 @@ class FilePanel(QWidget):
         if not ok or not label:
             return
         bm = _load_bookmarks()
-        if not any(b["path"] == self._current_path for b in bm):
-            bm.append({"label": label, "path": self._current_path})
+        if not any(b["path"] == self._current_path and
+                   b.get("is_remote", False) == self.is_remote for b in bm):
+            bm.append({"label": label, "path": self._current_path,
+                       "is_remote": self.is_remote})
             _save_bookmarks(bm)
 
     def _manage_bookmarks(self) -> None:
@@ -686,21 +769,34 @@ class FilePanel(QWidget):
         dlg.resize(480, 300)
         layout = QVBoxLayout(dlg)
 
-        bm = _load_bookmarks()
+        all_bm = _load_bookmarks()
+        other_bm = [b for b in all_bm if b.get("is_remote", False) != self.is_remote]
+        my_bm = [b for b in all_bm if b.get("is_remote", False) == self.is_remote]
+
         listw = QListWidget()
-        for b in bm:
+        for b in my_bm:
             listw.addItem(f"{b.get('label', '')}  —  {b['path']}")
         layout.addWidget(listw)
 
+        _cur = [-1]
+
+        def _on_row_changed(r: int) -> None:
+            _cur[0] = r
+
+        listw.currentRowChanged.connect(_on_row_changed)
+
         btn_layout = QHBoxLayout()
         del_btn = QPushButton("Delete selected")
+        del_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         def delete_sel():
-            row = listw.currentRow()
-            if row >= 0:
-                bm.pop(row)
-                _save_bookmarks(bm)
-                listw.takeItem(row)
+            row = _cur[0]
+            if row < 0:
+                return
+            my_bm.pop(row)
+            _save_bookmarks(other_bm + my_bm)
+            listw.takeItem(row)
+            _cur[0] = -1
 
         del_btn.clicked.connect(delete_sel)
         btn_layout.addWidget(del_btn)

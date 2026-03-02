@@ -46,7 +46,13 @@ class ConnectionDialog(QDialog):
             for s in sessions:
                 self._saved_cb.addItem(str(s))
             self._saved_cb.currentIndexChanged.connect(self._load_saved)
-            grid.addWidget(self._saved_cb, row, 1, 1, 3)
+            grid.addWidget(self._saved_cb, row, 1, 1, 2)
+            dup_btn = QPushButton("Duplicate")
+            dup_btn.clicked.connect(self._duplicate_session)
+            grid.addWidget(dup_btn, row, 3)
+            del_btn = QPushButton("Delete")
+            del_btn.clicked.connect(self._delete_session)
+            grid.addWidget(del_btn, row, 4)
             row += 1
 
             sep = QFrame()
@@ -139,6 +145,36 @@ class ConnectionDialog(QDialog):
 
         layout.addStretch()
         layout.addLayout(btn_layout)
+
+    def _refresh_session_combo(self) -> None:
+        self._saved_cb.blockSignals(True)
+        self._saved_cb.clear()
+        self._saved_cb.addItem("(select…)")
+        for s in self._session_mgr.sessions:
+            self._saved_cb.addItem(str(s))
+        self._saved_cb.blockSignals(False)
+
+    def _delete_session(self) -> None:
+        idx = self._saved_cb.currentIndex() - 1
+        if idx < 0:
+            return
+        name = self._session_mgr.sessions[idx].name
+        reply = QMessageBox.question(self, "Delete session",
+                                     f"Delete '{name}'?")
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._session_mgr.delete(idx)
+        self._refresh_session_combo()
+        self._saved_cb.setCurrentIndex(0)
+
+    def _duplicate_session(self) -> None:
+        idx = self._saved_cb.currentIndex() - 1  # -1 for placeholder
+        if idx < 0:
+            return
+        self._session_mgr.duplicate(idx)
+        self._refresh_session_combo()
+        # Select the new duplicate (one slot after original)
+        self._saved_cb.setCurrentIndex(idx + 2)
 
     def _toggle_auth(self) -> None:
         is_key = self._auth_key_radio.isChecked()

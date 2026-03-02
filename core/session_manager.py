@@ -84,6 +84,21 @@ class SessionManager:
         self._sessions.append(session)
         self.save()
 
+    def duplicate(self, index: int) -> "SavedSession":
+        """Clone session at index, rename to 'Copy of <name>'."""
+        src = self._sessions[index]
+        copy = SavedSession(
+            name=f"Copy of {src.name}",
+            host=src.host,
+            port=src.port,
+            username=src.username,
+            auth_type=src.auth_type,
+            key_file=src.key_file,
+        )
+        self._sessions.insert(index + 1, copy)
+        self.save()
+        return copy
+
     def delete(self, index: int) -> None:
         if 0 <= index < len(self._sessions):
             self._sessions.pop(index)

@@ -39,13 +39,16 @@ class SessionTab(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
         self._local = FilePanel(is_remote=False)
         self._remote = FilePanel(is_remote=True)
-        splitter.addWidget(self._local)
-        splitter.addWidget(self._remote)
-        splitter.setSizes([500, 500])
-        layout.addWidget(splitter)
+        self._splitter.addWidget(self._local)
+        self._splitter.addWidget(self._remote)
+        self._splitter.setSizes([500, 500])
+        layout.addWidget(self._splitter)
+
+        self._local.transfer_requested.connect(self._on_transfer_requested)
+        self._remote.transfer_requested.connect(self._on_transfer_requested)
 
     @property
     def ssh(self) -> SSHClient | None:
@@ -86,6 +89,19 @@ class SessionTab(QWidget):
     def refresh(self) -> None:
         self._local.refresh()
         self._remote.refresh()
+
+    def _on_transfer_requested(self, entries: list, direction: str) -> None:
+        _do_transfer(self.window(), self._ssh, self._local, self._remote,
+                     direction, preselected=entries, log_fn=self._log)
+
+    def swap_panels(self) -> None:
+        """Toggle local and remote panel positions in the splitter."""
+        sizes = self._splitter.sizes()
+        if self._splitter.widget(0) is self._local:
+            self._splitter.insertWidget(0, self._remote)
+        else:
+            self._splitter.insertWidget(0, self._local)
+        self._splitter.setSizes([sizes[1], sizes[0]])
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +309,7 @@ class MacSCPApp(QMainWindow):
 
         vm = bar.addMenu("View")
         self._add_action(vm, "Refresh", self._refresh, "Ctrl+R")
+        self._add_action(vm, "Swap Panels", self._swap_panels, "Ctrl+Shift+S")
         vm.addSeparator()
         self._add_action(vm, "Toggle Log Panel", self._toggle_log)
 
@@ -342,6 +359,7 @@ class MacSCPApp(QMainWindow):
         tb.addAction("+ Tab", self._new_tab)
         tb.addSeparator()
         tb.addAction("Refresh", self._refresh)
+        tb.addAction("⇄ Swap", self._swap_panels)
         tb.addSeparator()
         tb.addAction("Upload >>>", self._upload)
         tb.addAction("<<< Download", self._download)
@@ -618,6 +636,11 @@ class MacSCPApp(QMainWindow):
         tab = self._current_tab()
         if tab:
             tab.refresh()
+
+    def _swap_panels(self) -> None:
+        tab = self._current_tab()
+        if tab:
+            tab.swap_panels()
 
     def _upload(self) -> None:
         tab = self._current_tab()
