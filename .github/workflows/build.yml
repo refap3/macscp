@@ -1,0 +1,79 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+
+  # ── macOS ──────────────────────────────────────────────────────────────────
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Build .app bundle
+        run: python -m PyInstaller --noconfirm MacSCP.spec
+
+      - name: Create .dmg
+        run: |
+          mkdir staging
+          cp -r "dist/MacSCP.app" staging/
+          ln -s /Applications staging/Applications
+          hdiutil create \
+            -volname MacSCP \
+            -srcfolder staging \
+            -ov -format UDZO \
+            "dist/MacSCP.dmg"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MacSCP-mac
+          path: dist/MacSCP.dmg
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/MacSCP.dmg
+
+  # ── Windows ────────────────────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Build .exe
+        run: python -m PyInstaller --noconfirm MacSCP.spec
+
+      - name: Build installer (Inno Setup)
+        run: iscc installer.iss
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MacSCP-windows
+          path: dist/MacSCP-Setup.exe
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/MacSCP-Setup.exe
