@@ -102,6 +102,20 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 - **Right-click** — context menu: open, edit, view, delete, rename, properties, copy path, new folder/file, bookmarks, terminal
 - **Click column headers** — sort by name / size / modified / permissions; click again to reverse
 
+## Cleanup
+
+After a build, these folders can be safely deleted:
+
+```bash
+rm -rf build/ dist/ __pycache__/
+```
+
+To also remove the virtual environment (~300 MB):
+
+```bash
+rm -rf build/ dist/ __pycache__/ .venv/
+```
+
 ## Project layout
 
 ```
