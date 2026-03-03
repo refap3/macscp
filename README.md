@@ -48,18 +48,31 @@ A WinSCP-style SFTP client for macOS, written in Python (PyQt6 + paramiko).
 
 ## Quick start
 
+**One-line install** (clones repo, creates venv, installs deps, adds `macscp` command):
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/refap3/macscp/main/install.sh)
+```
+
+Then run:
+
+```bash
+macscp
+```
+
+**Update to latest version:**
+
+```bash
+bash ~/macscp/update.sh
+```
+
+**Manual install:**
+
 ```bash
 git clone https://github.com/refap3/macscp.git
 cd macscp
-bash install.sh   # creates .venv and installs dependencies
-./macscp          # launches the app
-```
-
-Or run directly after installing paramiko:
-
-```bash
-pip install PyQt6 paramiko
-python main.py
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python main.py
 ```
 
 ## Keyboard shortcuts
@@ -95,7 +108,8 @@ python main.py
 macscp/
 ├── main.py                   Entry point; applies theme
 ├── requirements.txt
-├── install.sh                One-shot setup (creates .venv, installs deps)
+├── install.sh                One-line installer (clone + venv + deps + launcher)
+├── update.sh                 Updater (git pull + pip install)
 ├── macscp                    Shell launcher
 ├── core/
 │   ├── ssh_client.py         SSH/SFTP wrapper (paramiko)

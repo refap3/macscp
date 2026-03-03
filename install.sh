@@ -1,49 +1,46 @@
-#!/bin/bash
-# MacSCP install script
-# Creates a virtual environment and installs dependencies.
+#!/usr/bin/env bash
+# One-line install:
+#   bash <(curl -fsSL https://raw.githubusercontent.com/refap3/macscp/main/install.sh)
+set -euo pipefail
 
-set -e
+DEST="${MACSCP_DIR:-$HOME/macscp}"
+VENV="$DEST/.venv"
+BIN="${MACSCP_BIN:-$HOME/.local/bin}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
-
-echo "=== MacSCP Installer ==="
-
-# Check Python version
-PY=$(python3 --version 2>&1)
-echo "Using: $PY"
-
-# Create venv if it doesn't exist
-if [ ! -d ".venv" ]; then
-    echo "Creating virtual environment..."
-    python3 -m venv .venv
+# Already installed?
+if [ -d "$DEST/.git" ]; then
+    echo "MacSCP already installed at $DEST"
+    echo "To update: bash $DEST/update.sh"
+    exit 0
 fi
 
-# Activate
-source .venv/bin/activate
+# Clone
+echo "Cloning macscp into $DEST ..."
+git clone --depth 1 https://github.com/refap3/macscp "$DEST"
 
-# Install dependencies
-echo "Installing dependencies..."
-pip install --upgrade pip -q
-pip install -r requirements.txt -q
+# Virtual environment
+echo "Creating virtual environment ..."
+python3 -m venv "$VENV"
+
+# Dependencies
+echo "Installing dependencies ..."
+"$VENV/bin/pip" install -q --upgrade pip
+"$VENV/bin/pip" install -q -r "$DEST/requirements.txt"
+
+# Launcher script
+mkdir -p "$BIN"
+cat > "$BIN/macscp" <<EOF
+#!/usr/bin/env bash
+exec "$VENV/bin/python" "$DEST/main.py" "\$@"
+EOF
+chmod +x "$BIN/macscp"
+echo "Launcher: $BIN/macscp"
+
+# PATH hint if needed
+case ":${PATH}:" in
+    *":$BIN:"*) ;;
+    *) echo "" && echo "NOTE: Add to your shell profile:  export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+esac
 
 echo ""
-echo "✅  Installation complete!"
-echo ""
-echo "To run MacSCP:"
-echo "   cd $SCRIPT_DIR && .venv/bin/python main.py"
-echo ""
-echo "Or use the launch script:"
-echo "   ./macscp"
-echo ""
-
-# Create a convenience launcher
-cat > macscp <<'LAUNCHER'
-#!/bin/bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
-exec .venv/bin/python main.py "$@"
-LAUNCHER
-chmod +x macscp
-
-echo "Launcher created: ./macscp"
+echo "Done. Run: macscp"
