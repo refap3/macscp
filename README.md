@@ -66,6 +66,14 @@ macscp
 bash ~/macscp/update.sh
 ```
 
+**Complete wipe (if install or update is broken):**
+
+```bash
+rm -rf ~/macscp ~/.local/bin/macscp
+```
+
+Then re-run the one-line installer above.
+
 **Manual install:**
 
 ```bash
