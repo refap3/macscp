@@ -51,7 +51,7 @@ A WinSCP-style SFTP client for macOS, written in Python (PyQt6 + paramiko).
 **One-line install** (clones repo, creates venv, installs deps, adds `macscp` command):
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/refap3/macscp/main/install.sh)
+curl -fsSL https://raw.githubusercontent.com/refap3/macscp/main/install.sh | bash
 ```
 
 Then run:
