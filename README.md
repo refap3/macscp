@@ -146,6 +146,15 @@ macscp/
     └── properties_dialog.py  File properties popup
 ```
 
+## Man page
+
+```bash
+man macscp
+```
+
+Requires the [alias](https://github.com/refap3/alias) repo to be installed (it sets `MANPATH`).
+Or directly: `man ~/macscp/man/man1/macscp.1`
+
 ## Data stored on disk
 
 | Path | Contents |

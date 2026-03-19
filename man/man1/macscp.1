@@ -1,0 +1,210 @@
+.TH MACSCP 1 "2026-03-19" "macscp" "User Commands"
+.SH NAME
+macscp \- WinSCP-style SFTP client for macOS
+.SH SYNOPSIS
+.B macscp
+.SH DESCRIPTION
+.B MacSCP
+is a graphical dual-pane SFTP client for macOS, modelled on WinSCP.
+It is written in Python with PyQt6 for the UI and paramiko for SSH/SFTP.
+.PP
+The left pane shows your local filesystem.
+The right pane shows the remote filesystem after connecting.
+Files can be transferred by selecting and using Upload/Download, or by drag and drop between panes.
+Multiple remote hosts can be open simultaneously, each in its own tab.
+.SH INSTALL
+.B One-line install:
+.PP
+.RS
+curl -fsSL https://raw.githubusercontent.com/refap3/macscp/main/install.sh | bash
+.RE
+.PP
+The installer clones the repo, creates a Python virtual environment, installs dependencies,
+and adds the
+.B macscp
+command to
+.IR ~/.local/bin/ .
+.PP
+.B Update:
+.PP
+.RS
+bash ~/macscp/update.sh
+.RE
+.PP
+.B Complete wipe (if install or update is broken):
+.PP
+.RS
+rm -rf ~/macscp ~/.local/bin/macscp
+.RE
+Then re-run the one-line installer.
+.PP
+.B Manual run:
+.PP
+.RS
+cd ~/macscp
+.br
+.venv/bin/python main.py
+.RE
+.SH CONNECTION
+.TP
+.B New connection
+Press
+.BR \(cmN
+or use
+.B File > New Connection.
+Enter host, port (default 22), username, and either a password or a private key file.
+Supported key types: RSA, Ed25519, ECDSA.
+.TP
+.B Saved sessions
+Previously used hosts appear in the sessions dropdown for one-click reconnect.
+Sessions are stored in
+.I ~/.macscp/sessions.json
+(no passwords stored).
+.TP
+.B Multiple sessions
+Each connection opens in its own tab.
+Open additional tabs with
+.BR \(cmT .
+.TP
+.B Connection status
+A colour-coded dot in the toolbar shows the connection state:
+grey (disconnected), orange (connecting), green (connected), red (error).
+.TP
+.B Keepalive
+A null packet is sent every 30 s to prevent idle sessions from dropping.
+.SH FILE BROWSER
+Both panels (local and remote) share the same controls.
+.TP
+.B Navigate
+Double-click a folder to enter it.
+Use
+.B < Back,
+.B ^ Up,
+.B Home
+buttons, or type a path in the address bar.
+.TP
+.B Hidden files
+Toggle dotfiles on/off with the hidden-files button.
+Hidden files are shown in grey when visible.
+.TP
+.B Filter
+Type in the filter box to narrow the file list instantly (80 ms debounce).
+.TP
+.B Sort
+Click any column header (Name, Size, Modified, Permissions) to sort.
+Click again to reverse. A \(bu/\(bv indicator shows direction.
+.TP
+.B Bookmarks
+Press the \(co button or right-click \(-> Add Bookmark to save the current path.
+Jump to saved paths from the bookmark menu.
+Bookmarks are stored in
+.IR ~/.macscp/bookmarks.json .
+.TP
+.B Right-click menu
+Open, Edit in VS Code, View contents, Delete, Rename, Properties,
+Copy Path, New Folder, New File, Add Bookmark, Open Terminal.
+.SH FILE TRANSFER
+.TP
+.B Upload
+Select files in the Local pane and press
+.BR \(cmU ,
+or drag from Local to Remote.
+.TP
+.B Download
+Select files in the Remote pane and press
+.BR \(cmD ,
+or drag from Remote to Local.
+.TP
+.B Directories
+Uploads and downloads recurse into directories automatically.
+.TP
+.B Conflict resolution
+When a file already exists at the destination, a dialog offers:
+Overwrite, Skip, Overwrite All, Skip All, Cancel.
+.TP
+.B Progress
+A progress dialog shows current file and overall progress.
+.TP
+.B Transfer log
+Opens automatically at the bottom on first transfer.
+Shows a timestamped result (OK / FAILED) for each file.
+.SH REMOTE TOOLS
+.TP
+.B Edit in VS Code
+Downloads the remote file to a temporary path, opens it in VS Code, and
+auto-uploads it back every time you save. Requires
+.I code
+on PATH.
+.TP
+.B Execute command
+Run a shell command on the remote host and view the output in a popup dialog.
+.TP
+.B SSH terminal
+Opens a Terminal.app window with an SSH session to the remote host.
+.SH KEYBOARD SHORTCUTS
+.TS
+l l.
+\(cmN	New connection
+\(cmT	New tab
+\(cmW	Close tab
+\(cmR	Refresh both panels
+\(cmU	Upload selected
+\(cmD	Download selected
+\(cmA	Select all (active panel)
+\(cmC	Copy path of selected items
+F2	Rename selected item
+F5	Refresh active panel
+Delete	Delete selected items
+\(cmQ	Quit
+.TE
+.SH PROJECT STRUCTURE
+.TS
+l l.
+main.py	Entry point; sets up Qt application
+requirements.txt	Python dependencies
+install.sh	One-line installer
+update.sh	Updater (git pull + pip install)
+macscp	Shell launcher script
+core/ssh_client.py	SSH/SFTP wrapper (paramiko)
+core/session_manager.py	Saved-session persistence
+gui/_invoke.py	Thread-safe main-thread callback helper
+gui/app.py	Main window, toolbar, session tabs, transfer log
+gui/connection_dialog.py	New-connection modal
+gui/file_panel.py	Dual-purpose file browser panel
+gui/transfer_dialog.py	Transfer progress dialog
+gui/overwrite_dialog.py	Overwrite/Skip conflict resolution dialog
+gui/properties_dialog.py	File properties popup
+.TE
+.SH DATA FILES
+.TP
+.I ~/.macscp/sessions.json
+Saved SSH hosts. Passwords are never stored here.
+.TP
+.I ~/.macscp/bookmarks.json
+Bookmarked directory paths for local and remote panels.
+.SH REQUIREMENTS
+.TP
+macOS 12+
+Uses
+.I osascript
+for Terminal.app integration.
+.TP
+Python 3.10+
+.TP
+PyQt6 >= 6.5
+.TP
+paramiko >= 3.0
+SSH/SFTP library.
+.TP
+code (VS Code CLI)
+Only required for "Edit in VS Code". Must be on PATH.
+.SH SEE ALSO
+.BR sftp (1),
+.BR ssh (1),
+.BR python3 (1)
+.SH VIEW THIS PAGE
+.RS
+man macscp
+.RE
+.SH AUTHOR
+rainers
