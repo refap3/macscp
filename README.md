@@ -10,6 +10,7 @@ A WinSCP-style SFTP client for macOS, written in Python (PyQt6 + paramiko).
 
 ### Connection
 - **SSH authentication** — password, RSA, Ed25519, and ECDSA private keys
+- **SSH config support** — reads `~/.ssh/config` automatically; `ProxyCommand` entries (e.g. Cloudflare Tunnel hosts) are honoured transparently
 - **Saved sessions** — previously used hosts remembered across launches; one-click reconnect from the sessions dropdown
 - **Multiple sessions** — each connection lives in its own tab (⌘T)
 - **Connection status** — colour-coded dot in the toolbar (grey / orange / green / red)
@@ -17,7 +18,7 @@ A WinSCP-style SFTP client for macOS, written in Python (PyQt6 + paramiko).
 
 ### File browser (both panels)
 - **Dual-pane** — local filesystem on the left, remote on the right
-- **Hidden files** — toggle dotfiles on/off; shown in grey when visible
+- **Hidden files** — global toggle in the toolbar and View menu (⌘⇧H) shows/hides dotfiles across all panels and tabs simultaneously; hidden files shown in grey when visible
 - **Live filter** — type to narrow the file list instantly (80 ms debounce)
 - **Sortable columns** — click any column header to sort; ▲/▼ shows direction
 - **Bookmarks** — ★ button to save and jump to favourite paths; right-click → Add Bookmark
@@ -91,6 +92,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 | ⌘T | New tab |
 | ⌘W | Close tab |
 | ⌘R | Refresh both panels |
+| ⌘⇧H | Toggle hidden files (all panels) |
 | ⌘U | Upload selected |
 | ⌘D | Download selected |
 | ⌘A | Select all (in active panel) |

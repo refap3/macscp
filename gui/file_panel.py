@@ -232,6 +232,10 @@ class FilePanel(QWidget):
                 result.append(self._filtered[idx])
         return result
 
+    def set_show_hidden(self, value: bool) -> None:
+        self._show_hidden = value
+        self._apply_filter()
+
     def refresh(self) -> None:
         if self._current_path:
             self._navigate_to(self._current_path, add_history=False)
@@ -299,11 +303,6 @@ class FilePanel(QWidget):
         self._filter_edit.setPlaceholderText("Type to filter…")
         self._filter_edit.textChanged.connect(self._on_filter_changed)
         filter_bar.addWidget(self._filter_edit)
-
-        self._hidden_btn = QPushButton("Show Hidden")
-        self._hidden_btn.setCheckable(True)
-        self._hidden_btn.toggled.connect(self._on_hidden_toggle)
-        filter_bar.addWidget(self._hidden_btn)
         layout.addLayout(filter_bar)
 
         # Tree widget
@@ -405,10 +404,6 @@ class FilePanel(QWidget):
 
     def _on_filter_changed(self, text: str) -> None:
         self._filter_text = text.lower()
-        self._apply_filter()
-
-    def _on_hidden_toggle(self, checked: bool) -> None:
-        self._show_hidden = checked
         self._apply_filter()
 
     def _apply_filter(self) -> None:

@@ -282,6 +282,7 @@ class MacSCPApp(QMainWindow):
 
         self._session_mgr = SessionManager()
         self._tabs: list[SessionTab] = []
+        self._show_hidden = False
 
         self._build_menu()
         self._build_toolbar()
@@ -310,6 +311,11 @@ class MacSCPApp(QMainWindow):
         vm = bar.addMenu("View")
         self._add_action(vm, "Refresh", self._refresh, "Ctrl+R")
         self._add_action(vm, "Swap Panels", self._swap_panels, "Ctrl+Shift+S")
+        vm.addSeparator()
+        self._show_hidden_action = vm.addAction("Show Hidden Files")
+        self._show_hidden_action.setCheckable(True)
+        self._show_hidden_action.setShortcut(QKeySequence("Ctrl+Shift+H"))
+        self._show_hidden_action.toggled.connect(self._toggle_show_hidden)
         vm.addSeparator()
         self._add_action(vm, "Toggle Log Panel", self._toggle_log)
 
@@ -360,6 +366,10 @@ class MacSCPApp(QMainWindow):
         tb.addSeparator()
         tb.addAction("Refresh", self._refresh)
         tb.addAction("⇄ Swap", self._swap_panels)
+
+        self._hidden_tb_action = tb.addAction("Show Hidden")
+        self._hidden_tb_action.setCheckable(True)
+        self._hidden_tb_action.toggled.connect(self._toggle_show_hidden)
         tb.addSeparator()
         tb.addAction("Upload >>>", self._upload)
         tb.addAction("<<< Download", self._download)
@@ -445,6 +455,8 @@ class MacSCPApp(QMainWindow):
         self._tabs.append(tab)
         self._tab_widget.addTab(tab, f"  {title}  ")
         self._tab_widget.setCurrentWidget(tab)
+        tab.local_panel.set_show_hidden(self._show_hidden)
+        tab.remote_panel.set_show_hidden(self._show_hidden)
         return tab
 
     def _current_tab(self) -> SessionTab | None:
@@ -631,6 +643,16 @@ class MacSCPApp(QMainWindow):
     # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
+
+    def _toggle_show_hidden(self, checked: bool) -> None:
+        if checked == self._show_hidden:
+            return
+        self._show_hidden = checked
+        self._show_hidden_action.setChecked(checked)
+        self._hidden_tb_action.setChecked(checked)
+        for tab in self._tabs:
+            tab.local_panel.set_show_hidden(checked)
+            tab.remote_panel.set_show_hidden(checked)
 
     def _refresh(self) -> None:
         tab = self._current_tab()

@@ -55,6 +55,16 @@ or use
 Enter host, port (default 22), username, and either a password or a private key file.
 Supported key types: RSA, Ed25519, ECDSA.
 .TP
+.B SSH config
+MacSCP reads
+.I ~/.ssh/config
+on every connection.
+.B ProxyCommand
+entries are honoured automatically, so hosts that require a proxy \(em such as
+Cloudflare Tunnel hosts using
+.I cloudflared access ssh
+\(em work without any extra configuration.
+.TP
 .B Saved sessions
 Previously used hosts appear in the sessions dropdown for one-click reconnect.
 Sessions are stored in
@@ -84,7 +94,13 @@ Use
 buttons, or type a path in the address bar.
 .TP
 .B Hidden files
-Toggle dotfiles on/off with the hidden-files button.
+Toggle dotfiles on/off with the
+.B Show Hidden
+button in the toolbar or
+.B View > Show Hidden Files
+.RB ( \(cmShiftH ).
+The toggle is global: it applies to all panels and tabs at once,
+including the local panel.
 Hidden files are shown in grey when visible.
 .TP
 .B Filter
@@ -148,6 +164,7 @@ l l.
 \(cmT	New tab
 \(cmW	Close tab
 \(cmR	Refresh both panels
+\(cmShiftH	Toggle hidden files (all panels)
 \(cmU	Upload selected
 \(cmD	Download selected
 \(cmA	Select all (active panel)

@@ -77,6 +77,17 @@ class SSHClient:
             "auth_timeout": 15,
         }
 
+        # Honour ~/.ssh/config ProxyCommand (needed for Cloudflare Tunnel etc.)
+        ssh_cfg = paramiko.SSHConfig()
+        cfg_path = os.path.expanduser("~/.ssh/config")
+        if os.path.exists(cfg_path):
+            with open(cfg_path) as _f:
+                ssh_cfg.parse(_f)
+        host_cfg = ssh_cfg.lookup(host)
+        proxy_cmd = host_cfg.get("proxycommand")
+        if proxy_cmd:
+            kwargs["sock"] = paramiko.ProxyCommand(proxy_cmd)
+
         if key_file and key_file.strip():
             pkey = self._load_key(key_file.strip(), key_passphrase)
             kwargs["pkey"] = pkey
@@ -255,10 +266,32 @@ class SSHClient:
     # ------------------------------------------------------------------
 
     def get_home_dir(self) -> str:
+        # Get $HOME from SSH, then verify it exists in SFTP space.
+        # Some servers (e.g. Synology) use a different SFTP root, so $HOME
+        # as seen by the shell (/var/services/homes/user) differs from the
+        # SFTP path (/homes/user). Strip known prefixes and retry before
+        # falling back to the SFTP working directory.
+        ssh_home = ""
         try:
             _, out, _ = self._ssh.exec_command("echo $HOME", timeout=5)
-            home = out.read().decode().strip()
-            return home or "/"
+            ssh_home = out.read().decode().strip()
+        except Exception:
+            pass
+
+        candidates = [ssh_home] if ssh_home else []
+        for prefix in ("/var/services", "/volume1"):
+            if ssh_home.startswith(prefix):
+                candidates.append(ssh_home[len(prefix):] or "/")
+
+        for path in candidates:
+            try:
+                self._sftp.stat(path)
+                return path
+            except Exception:
+                pass
+
+        try:
+            return self._sftp.normalize(".")
         except Exception:
             return "/"
 
